@@ -10,6 +10,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 import requests
 import json
 import re
+import openai 
 
 # Try to import docx2txt, but handle if it's not available
 try:
@@ -21,7 +22,7 @@ except ImportError:
 
 # Set page config with modern theme
 st.set_page_config(
-    page_title="Intelligent Document Assistant", 
+    page_title="Multi-AI Document Assistant", 
     layout="wide",
     page_icon="📄",
     initial_sidebar_state="expanded"
@@ -154,6 +155,13 @@ st.markdown("""
         font-size: 0.9rem;
         color: #555;
     }
+    .model-selector {
+        background-color: #f0f7ff;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #1f77b4;
+        margin-bottom: 15px;
+    }
     /* Hide Streamlit's default elements */
     header { visibility: hidden; }
 </style>
@@ -172,6 +180,8 @@ if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = "Google Gemini"
 
 # Initialize embeddings with proper error handling
 @st.cache_resource
@@ -254,7 +264,7 @@ def stream_response(text, speed=0.02):
     
     return partial_response
 
-# Simple function to query Gemini using direct API calls
+# Function to query Google Gemini API
 def query_gemini(prompt, context="", api_key=None, stream=False):
     if not api_key:
         return "Please enter your Google Gemini API key in the sidebar"
@@ -292,6 +302,158 @@ def query_gemini(prompt, context="", api_key=None, stream=False):
                 return stream_response(full_response)
             else:
                 return full_response
+        else:
+            return f"API Error: {response.status_code} - {response.text}"
+            
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# Add this import at the top of your file
+from openai import OpenAI
+
+def query_openai(prompt, context="", api_key=None, stream=False):
+    if not api_key:
+        return "Please enter your OpenAI API key in the sidebar"
+    
+    try:
+        # For new OpenAI versions (v1.0.0+)
+        client = OpenAI(api_key=api_key)
+
+        # Prepare the messages
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"You are a helpful assistant that answers questions based on the provided documents. "
+                    f"Here is the context from the documents:\n\n{context}\n\n"
+                    "Please structure your response with clear topics and subtopics, "
+                    "using bullet points for lists and bold text for important information. "
+                    "Avoid using asterisks (*) in your response."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
+        # Use non-streaming for simplicity
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024
+        )
+
+        content = response.choices[0].message.content
+        
+        # Simulate streaming if requested
+        if stream:
+            return stream_response(content)
+        else:
+            return content
+
+    except Exception as e:
+        return f"Error: {str(e)}"
+        
+        
+def query_deepseek(prompt, context="", api_key=None, stream=False):
+    if not api_key:
+        return "Please enter your DeepSeek API key in the sidebar"
+    
+    try:
+        # DeepSeek API endpoint
+        url = "https://api.deepseek.com/v1/chat/completions"
+        
+        # Prepare the request payload
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": f"You are a helpful assistant that answers questions based on the provided documents. Here is the context from the documents:\n\n{context}\n\nPlease structure your response with clear topics and subtopics, using bullet points for lists and bold text for important information. Avoid using asterisks (*) in your response."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "stream": False
+        }
+        
+        # Make the API request
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
+        
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
+        if response.status_code == 200:
+            result = response.json()
+            full_response = result['choices'][0]['message']['content']
+            
+            if stream:
+                return stream_response(full_response)
+            else:
+                return full_response
+        else:
+            return f"API Error: {response.status_code} - {response.text}"
+            
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# Function to query LLaMA API (using Replicate)
+def query_llama(prompt, context="", api_key=None, stream=False):
+    if not api_key:
+        return "Please enter your Replicate API key for LLaMA in the sidebar"
+    
+    try:
+        # Replicate API endpoint for LLaMA
+        url = "https://api.replicate.com/v1/predictions"
+        
+        # Prepare the request payload
+        payload = {
+            "version": "a16z-infra/llama7b-v2-chat:4f0a4744c7295c024a1de15e1a63c880d3da035fa1f49bfd344fe076074c8eea",
+            "input": {
+                "prompt": f"Based on the following documents:\n\n{context}\n\nAnswer this question: {prompt}. Please structure your response with clear topics and subtopics, using bullet points for lists and bold text for important information. Avoid using asterisks (*) in your response.",
+                "max_length": 1024,
+                "temperature": 0.7
+            }
+        }
+        
+        # Make the API request
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Token {api_key}'
+        }
+        
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
+        if response.status_code == 200:
+            result = response.json()
+            prediction_id = result['id']
+            
+            # Wait for the prediction to complete
+            prediction_url = f"https://api.replicate.com/v1/predictions/{prediction_id}"
+            for _ in range(10):  # Try 10 times with delays
+                time.sleep(1)
+                prediction_response = requests.get(prediction_url, headers=headers)
+                prediction_result = prediction_response.json()
+                
+                if prediction_result['status'] == 'succeeded':
+                    full_response = ''.join(prediction_result['output'])
+                    
+                    if stream:
+                        return stream_response(full_response)
+                    else:
+                        return full_response
+                elif prediction_result['status'] == 'failed':
+                    return "LLaMA API request failed"
+            
+            return "LLaMA API request timed out"
         else:
             return f"API Error: {response.status_code} - {response.text}"
             
@@ -406,8 +568,8 @@ def setup_agent(uploaded_files):
     return False
 
 # Modern UI with default Streamlit layout
-st.markdown('<h1 class="main-header">Intelligent Document Assistant</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subheader">Upload documents and engage in intelligent conversations about their content</p>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">Multi-AI Document Assistant</h1>', unsafe_allow_html=True)
+st.markdown('<p class="subheader">Upload documents and engage with multiple AI models</p>', unsafe_allow_html=True)
 
 # Initial conversation starter
 if not st.session_state.messages:
@@ -450,6 +612,19 @@ with chat_container:
 
 # Sidebar (default Streamlit layout)
 with st.sidebar:
+    st.header("AI Model Selection")
+    
+    # Model selector
+    st.markdown('<div class="model-selector">', unsafe_allow_html=True)
+    model_option = st.selectbox(
+        "Choose AI Model",
+        ["Google Gemini", "OpenAI GPT", "DeepSeek", "LLaMA"],
+        index=0,
+        help="Select which AI model to use for generating responses"
+    )
+    st.session_state.selected_model = model_option
+    st.markdown('</div>', unsafe_allow_html=True)
+    
     st.header("Document Management")
     
     # File uploader with explicit acceptance
@@ -464,8 +639,15 @@ with st.sidebar:
     if uploaded_files:
         st.session_state.uploaded_files = [file.name for file in uploaded_files]
     
-    # API key input
-    api_key = st.text_input("Google Gemini API Key", type="password", help="Get your API key from https://aistudio.google.com/")
+    # API key inputs based on selected model
+    if st.session_state.selected_model == "Google Gemini":
+        api_key = st.text_input("Google Gemini API Key", type="password", help="Get your API key from https://aistudio.google.com/")
+    elif st.session_state.selected_model == "OpenAI GPT":
+        api_key = st.text_input("OpenAI API Key", type="password", help="Get your API key from https://platform.openai.com/")
+    elif st.session_state.selected_model == "DeepSeek":
+        api_key = st.text_input("DeepSeek API Key", type="password", help="Get your API key from https://platform.deepseek.com/")
+    elif st.session_state.selected_model == "LLaMA":
+        api_key = st.text_input("Replicate API Key (for LLaMA)", type="password", help="Get your API key from https://replicate.com/")
     
     # Process button with loading state
     if st.button("Process Documents", type="primary", use_container_width=True):
@@ -519,8 +701,17 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         else:
             context = "No documents processed yet."
         
-        # Generate response
-        response = query_gemini(prompt, context, api_key, stream=streaming_enabled)
+        # Generate response using selected model
+        if st.session_state.selected_model == "Google Gemini":
+            response = query_gemini(prompt, context, api_key, stream=streaming_enabled)
+        elif st.session_state.selected_model == "OpenAI GPT":
+            response = query_openai(prompt, context, api_key, stream=streaming_enabled)
+        elif st.session_state.selected_model == "DeepSeek":
+            response = query_deepseek(prompt, context, api_key, stream=streaming_enabled)
+        elif st.session_state.selected_model == "LLaMA":
+            response = query_llama(prompt, context, api_key, stream=streaming_enabled)
+        else:
+            response = "Please select a valid AI model"
         
         # Add assistant response to chat history
         st.session_state.messages.append({
